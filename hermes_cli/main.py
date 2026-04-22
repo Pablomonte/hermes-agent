@@ -166,6 +166,10 @@ from hermes_cli.env_loader import load_hermes_dotenv
 
 load_hermes_dotenv(project_env=PROJECT_ROOT / ".env")
 
+# Apply kimi-coding patches (api_key, model name, X-Msh headers).
+# Must run after env is loaded (needs KIMI_API_KEY) and before any OpenAI client is built.
+from hermes_cli import _kimi_coding_patches  # noqa: F401,E402
+
 # Initialize centralized file logging early — all `hermes` subcommands
 # (chat, setup, gateway, config, etc.) write to agent.log + errors.log.
 try:
