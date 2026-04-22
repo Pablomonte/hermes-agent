@@ -1174,9 +1174,8 @@ class AIAgent:
 
                     client_kwargs["default_headers"] = copilot_default_headers()
                 elif base_url_host_matches(effective_base, "api.kimi.com"):
-                    client_kwargs["default_headers"] = {
-                        "User-Agent": "claude-code/0.1.0",
-                    }
+                    from hermes_cli.auth import kimi_coding_default_headers
+                    client_kwargs["default_headers"] = kimi_coding_default_headers()
                 elif base_url_host_matches(effective_base, "portal.qwen.ai"):
                     client_kwargs["default_headers"] = _qwen_portal_headers()
                 elif base_url_host_matches(effective_base, "chatgpt.com"):
@@ -5018,7 +5017,8 @@ class AIAgent:
 
             self._client_kwargs["default_headers"] = copilot_default_headers()
         elif base_url_host_matches(base_url, "api.kimi.com"):
-            self._client_kwargs["default_headers"] = {"User-Agent": "claude-code/0.1.0"}
+            from hermes_cli.auth import kimi_coding_default_headers
+            self._client_kwargs["default_headers"] = kimi_coding_default_headers()
         elif base_url_host_matches(base_url, "portal.qwen.ai"):
             self._client_kwargs["default_headers"] = _qwen_portal_headers()
         elif base_url_host_matches(base_url, "chatgpt.com"):
@@ -9128,6 +9128,16 @@ class AIAgent:
                 try:
                     self._reset_stream_delivery_tracking()
                     api_kwargs = self._build_api_kwargs(api_messages)
+                    try:
+                        from hermes_cli.models import kimi_coding_required_temperature
+                    except Exception:
+                        kimi_coding_required_temperature = None
+                    if kimi_coding_required_temperature is not None:
+                        _temp = kimi_coding_required_temperature(self.model, self.base_url)
+                        if _temp is not None:
+                            if "temperature" in api_kwargs:
+                                del api_kwargs["temperature"]
+                            api_kwargs["temperature"] = _temp
                     if self._force_ascii_payload:
                         _sanitize_structure_non_ascii(api_kwargs)
                     if self.api_mode == "codex_responses":
