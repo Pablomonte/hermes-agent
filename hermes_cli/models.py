@@ -195,6 +195,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-oss-120b",
     ],
     "kimi-coding": [
+        "k2.6-code-preview",
         "kimi-k2.6",
         "kimi-k2.5",
         "kimi-for-coding",
@@ -204,6 +205,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "kimi-k2-0905-preview",
     ],
     "kimi-coding-cn": [
+        "k2.6-code-preview",
         "kimi-k2.6",
         "kimi-k2.5",
         "kimi-k2-thinking",
@@ -211,6 +213,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "kimi-k2-0905-preview",
     ],
     "moonshot": [
+        "k2.6-code-preview",
         "kimi-k2.6",
         "kimi-k2.5",
         "kimi-k2-thinking",
@@ -2496,6 +2499,17 @@ def validate_requested_model(
             # listing (e.g. Z.AI Pro/Max plans can use glm-5 on coding
             # endpoints even though it's not in /models).  Warn but allow.
 
+            # Trust our static curated list when the live API is incomplete
+            # (e.g. Kimi Coding Plan only exposes kimi-for-coding).
+            static_models = _PROVIDER_MODELS.get(normalized, [])
+            if requested_for_lookup in static_models:
+                return {
+                    "accepted": True,
+                    "persist": True,
+                    "recognized": True,
+                    "message": None,
+                }
+
             # Auto-correct if the top match is very similar (e.g. typo)
             auto = get_close_matches(requested_for_lookup, api_models, n=1, cutoff=0.9)
             if auto:
@@ -2616,8 +2630,17 @@ def validate_requested_model(
             ),
         }
 
-    # No catalog available — accept with a warning, matching the comment's
-    # stated intent ("Accept and persist, but warn").
+    # Trust our static curated list even when the live API is unreachable.
+    # If we hand-picked the model, there's no value in warning the user.
+    static_models = _PROVIDER_MODELS.get(normalized, [])
+    if requested_for_lookup in static_models:
+        return {
+            "accepted": True,
+            "persist": True,
+            "recognized": True,
+            "message": None,
+        }
+
     return {
         "accepted": True,
         "persist": True,

@@ -346,19 +346,9 @@ def get_anthropic_key() -> str:
 # on api.kimi.com/coding.  Legacy keys from platform.moonshot.ai work on
 # api.moonshot.ai/v1 (the old default).  Auto-detect when user hasn't set
 # KIMI_BASE_URL explicitly.
-<<<<<<< HEAD
 KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1"
 KIMI_CODE_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
-KIMI_CODE_OAUTH_HOST = "https://auth.kimi.com"
-=======
-#
-# Note: the base URL intentionally has NO /v1 suffix.  The /coding endpoint
-# speaks the Anthropic Messages protocol, and the anthropic SDK appends
-# "/v1/messages" internally — so "/coding" + SDK suffix → "/coding/v1/messages"
-# (the correct target). Using "/coding/v1" here would produce
-# "/coding/v1/v1/messages" (a 404).
-KIMI_CODE_BASE_URL = "https://api.kimi.com/coding"
->>>>>>> upstream/main
+KIMI_CODE_OAUTH_HOST="https:....com"
 
 
 def _resolve_kimi_base_url(api_key: str, default_url: str, env_override: str) -> str:
