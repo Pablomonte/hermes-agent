@@ -1174,9 +1174,8 @@ class AIAgent:
 
                     client_kwargs["default_headers"] = copilot_default_headers()
                 elif base_url_host_matches(effective_base, "api.kimi.com"):
-                    client_kwargs["default_headers"] = {
-                        "User-Agent": "KimiCLI/1.30.0",
-                    }
+                    from hermes_cli.auth import kimi_coding_default_headers
+                    client_kwargs["default_headers"] = kimi_coding_default_headers()
                 elif base_url_host_matches(effective_base, "portal.qwen.ai"):
                     client_kwargs["default_headers"] = _qwen_portal_headers()
                 elif base_url_host_matches(effective_base, "chatgpt.com"):
@@ -5049,7 +5048,8 @@ class AIAgent:
 
             self._client_kwargs["default_headers"] = copilot_default_headers()
         elif base_url_host_matches(base_url, "api.kimi.com"):
-            self._client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
+            from hermes_cli.auth import kimi_coding_default_headers
+            self._client_kwargs["default_headers"] = kimi_coding_default_headers()
         elif base_url_host_matches(base_url, "portal.qwen.ai"):
             self._client_kwargs["default_headers"] = _qwen_portal_headers()
         elif base_url_host_matches(base_url, "chatgpt.com"):
@@ -6920,6 +6920,16 @@ class AIAgent:
                 api_kwargs.pop("temperature", None)
             elif fixed_temperature is not None:
                 api_kwargs["temperature"] = fixed_temperature
+
+        # Kimi Coding k2.6 requires exactly 0.6 on the coding endpoint.
+        from hermes_cli.models import kimi_coding_required_temperature
+        kimi_required_temp = kimi_coding_required_temperature(
+            self.model,
+            base_url=self.base_url,
+        )
+        if kimi_required_temp is not None:
+            api_kwargs["temperature"] = kimi_required_temp
+
         if self._is_qwen_portal():
             api_kwargs["metadata"] = {
                 "sessionId": self.session_id or "hermes",
