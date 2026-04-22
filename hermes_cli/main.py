@@ -6963,6 +6963,9 @@ For more help on a command:
         "reset", help="Clear exhaustion status for all credentials for a provider"
     )
     auth_reset.add_argument("provider", help="Provider id")
+    auth_kimi = auth_subparsers.add_parser(
+        "kimi", help="Show Kimi CLI OAuth diagnostics"
+    )
     auth_parser.set_defaults(func=cmd_auth)
 
     # =========================================================================
