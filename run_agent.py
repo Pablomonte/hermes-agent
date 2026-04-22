@@ -1174,9 +1174,8 @@ class AIAgent:
 
                     client_kwargs["default_headers"] = copilot_default_headers()
                 elif base_url_host_matches(effective_base, "api.kimi.com"):
-                    client_kwargs["default_headers"] = {
-                        "User-Agent": "KimiCLI/1.30.0",
-                    }
+                    from hermes_cli.auth import kimi_coding_default_headers
+                    client_kwargs["default_headers"] = kimi_coding_default_headers()
                 elif base_url_host_matches(effective_base, "portal.qwen.ai"):
                     client_kwargs["default_headers"] = _qwen_portal_headers()
                 elif base_url_host_matches(effective_base, "chatgpt.com"):
@@ -2912,6 +2911,37 @@ class AIAgent:
             if isinstance(msg, dict) and msg.get("role") == "user":
                 msg["content"] = override
 
+    def _sanitize_unanswered_tool_calls(self, messages: List[Dict], error_msg: str = "Agent interrupted by user") -> None:
+        """Append synthetic error results for any unanswered tool_calls.
+
+        OpenAI/Anthropic require a `role="tool"` message for every
+        `tool_call_id` emitted by the assistant. If an interrupt or error
+        fires before all tools finish, this prevents the next API call from
+        failing with a "missing tool response" error.
+        """
+        for idx in range(len(messages) - 1, -1, -1):
+            msg = messages[idx]
+            if not isinstance(msg, dict):
+                break
+            if msg.get("role") == "tool":
+                continue
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                answered_ids = {
+                    m["tool_call_id"]
+                    for m in messages[idx + 1:]
+                    if isinstance(m, dict) and m.get("role") == "tool"
+                }
+                for tc in msg["tool_calls"]:
+                    if not tc or not isinstance(tc, dict):
+                        continue
+                    if tc["id"] not in answered_ids:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": f"Error executing tool: {error_msg}",
+                        })
+                break
+
     def _persist_session(self, messages: List[Dict], conversation_history: List[Dict] = None):
         """Save session state to both JSON log and SQLite on any exit path.
 
@@ -2921,6 +2951,8 @@ class AIAgent:
         if not self.persist_session:
             return
         self._apply_persist_user_message_override(messages)
+        # Guarantee API-valid transcript: every tool_call must have a matching tool result.
+        self._sanitize_unanswered_tool_calls(messages)
         self._session_messages = messages
         self._save_session_log(messages)
         self._flush_messages_to_session_db(messages, conversation_history)
@@ -5049,7 +5081,8 @@ class AIAgent:
 
             self._client_kwargs["default_headers"] = copilot_default_headers()
         elif base_url_host_matches(base_url, "api.kimi.com"):
-            self._client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
+            from hermes_cli.auth import kimi_coding_default_headers
+            self._client_kwargs["default_headers"] = kimi_coding_default_headers()
         elif base_url_host_matches(base_url, "portal.qwen.ai"):
             self._client_kwargs["default_headers"] = _qwen_portal_headers()
         elif base_url_host_matches(base_url, "chatgpt.com"):
@@ -6920,6 +6953,16 @@ class AIAgent:
                 api_kwargs.pop("temperature", None)
             elif fixed_temperature is not None:
                 api_kwargs["temperature"] = fixed_temperature
+
+        # Kimi Coding k2.6 requires exactly 0.6 on the coding endpoint.
+        from hermes_cli.models import kimi_coding_required_temperature
+        kimi_required_temp = kimi_coding_required_temperature(
+            self.model,
+            base_url=self.base_url,
+        )
+        if kimi_required_temp is not None:
+            api_kwargs["temperature"] = kimi_required_temp
+
         if self._is_qwen_portal():
             api_kwargs["metadata"] = {
                 "sessionId": self.session_id or "hermes",
@@ -11679,33 +11722,7 @@ class AIAgent:
                     logger.error(error_msg)
                 
                 logger.debug("Outer loop error in API call #%d", api_call_count, exc_info=True)
-                
-                # If an assistant message with tool_calls was already appended,
-                # the API expects a role="tool" result for every tool_call_id.
-                # Fill in error results for any that weren't answered yet.
-                for idx in range(len(messages) - 1, -1, -1):
-                    msg = messages[idx]
-                    if not isinstance(msg, dict):
-                        break
-                    if msg.get("role") == "tool":
-                        continue
-                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                        answered_ids = {
-                            m["tool_call_id"]
-                            for m in messages[idx + 1:]
-                            if isinstance(m, dict) and m.get("role") == "tool"
-                        }
-                        for tc in msg["tool_calls"]:
-                            if not tc or not isinstance(tc, dict): continue
-                            if tc["id"] not in answered_ids:
-                                err_msg = {
-                                    "role": "tool",
-                                    "tool_call_id": tc["id"],
-                                    "content": f"Error executing tool: {error_msg}",
-                                }
-                                messages.append(err_msg)
-                    break
-                
+
                 # Non-tool errors don't need a synthetic message injected.
                 # The error is already printed to the user (line above), and
                 # the retry loop continues.  Injecting a fake user/assistant
