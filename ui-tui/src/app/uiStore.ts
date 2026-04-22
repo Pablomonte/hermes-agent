@@ -10,6 +10,7 @@ const buildUiState = (): UiState => ({
   busy: false,
   compact: false,
   detailsMode: 'collapsed',
+  historyNavRequiresEmptyInput: false,
   info: null,
   inlineDiffs: true,
   showCost: false,

@@ -29,11 +29,13 @@ const quietRpc = async <T extends Record<string, any> = Record<string, any>>(
 
 export const applyDisplay = (cfg: ConfigFullResponse | null, setBell: (v: boolean) => void) => {
   const d = cfg?.config?.display ?? {}
+  const t = cfg?.config?.tui ?? {}
 
   setBell(!!d.bell_on_complete)
   patchUiState({
     compact: !!d.tui_compact,
     detailsMode: resolveDetailsMode(d),
+    historyNavRequiresEmptyInput: !!t.history_nav_requires_empty_input,
     inlineDiffs: d.inline_diffs !== false,
     showCost: !!d.show_cost,
     showReasoning: !!d.show_reasoning,

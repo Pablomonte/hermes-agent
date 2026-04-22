@@ -63,8 +63,12 @@ export interface ConfigDisplayConfig {
   tui_statusbar?: boolean
 }
 
+export interface ConfigTuiConfig {
+  history_nav_requires_empty_input?: boolean
+}
+
 export interface ConfigFullResponse {
-  config?: { display?: ConfigDisplayConfig }
+  config?: { display?: ConfigDisplayConfig; tui?: ConfigTuiConfig }
 }
 
 export interface ConfigMtimeResponse {
