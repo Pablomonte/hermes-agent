@@ -9422,7 +9422,7 @@ class AIAgent:
                     except Exception:
                         kimi_coding_required_temperature = None
                     if kimi_coding_required_temperature is not None:
-                        _temp = kimi_coding_required_temperature(self.model, self.base_url)
+                        _temp = kimi_coding_required_temperature(self.model, base_url=self.base_url)
                         if _temp is not None:
                             if "temperature" in api_kwargs:
                                 del api_kwargs["temperature"]
