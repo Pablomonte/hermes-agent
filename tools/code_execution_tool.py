@@ -65,7 +65,7 @@ SANDBOX_ALLOWED_TOOLS = frozenset([
 ])
 
 # Resource limit defaults (overridable via config.yaml → code_execution.*)
-DEFAULT_TIMEOUT = 300        # 5 minutes
+DEFAULT_TIMEOUT = 900        # 15 minutes
 DEFAULT_MAX_TOOL_CALLS = 50
 MAX_STDOUT_BYTES = 50_000    # 50 KB
 MAX_STDERR_BYTES = 10_000    # 10 KB
@@ -239,7 +239,7 @@ def _connect():
     if _sock is None:
         _sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         _sock.connect(os.environ["HERMES_RPC_SOCKET"])
-        _sock.settimeout(300)
+        _sock.settimeout(900)
     return _sock
 
 def _call(tool_name, args):
@@ -298,11 +298,11 @@ def _call(tool_name, args):
     os.rename(tmp, req_file)
 
     # Wait for response with adaptive polling
-    deadline = time.monotonic() + 300  # 5-minute timeout per tool call
+    deadline = time.monotonic() + 900  # 15-minute timeout per tool call
     poll_interval = 0.05  # Start at 50ms
     while not os.path.exists(res_file):
         if time.monotonic() > deadline:
-            raise RuntimeError(f"RPC timeout: no response for {tool_name} after 300s")
+            raise RuntimeError(f"RPC timeout: no response for {tool_name} after 900s")
         time.sleep(poll_interval)
         poll_interval = min(poll_interval * 1.2, 0.25)  # Back off to 250ms
 
@@ -352,7 +352,7 @@ def _rpc_server_loop(
     try:
         server_sock.settimeout(5)
         conn, _ = server_sock.accept()
-        conn.settimeout(300)
+        conn.settimeout(900)
 
         buf = b""
         while True:
@@ -1568,7 +1568,7 @@ def build_execute_code_schema(enabled_sandbox_tools: set = None,
         "or the task requires interactive user input.\n\n"
         f"Available via `from hermes_tools import ...`:\n\n"
         f"{tool_lines}\n\n"
-        "Limits: 5-minute timeout, 50KB stdout cap, max 50 tool calls per script. "
+        "Limits: 15-minute timeout, 50KB stdout cap, max 50 tool calls per script. "
         "terminal() is foreground-only (no background or pty).\n\n"
         f"{cwd_note}\n\n"
         "Print your final result to stdout. Use Python stdlib (json, re, math, csv, "
