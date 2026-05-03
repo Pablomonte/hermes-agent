@@ -146,7 +146,8 @@ _TOOL_STUBS = {
 
 
 def generate_hermes_tools_module(enabled_tools: List[str],
-                                 transport: str = "uds") -> str:
+                                 transport: str = "uds",
+                                 timeout: int = DEFAULT_TIMEOUT) -> str:
     """
     Build the source code for the hermes_tools.py stub module.
 
@@ -173,9 +174,9 @@ def generate_hermes_tools_module(enabled_tools: List[str],
         export_names.append(func_name)
 
     if transport == "file":
-        header = _FILE_TRANSPORT_HEADER
+        header = _FILE_TRANSPORT_HEADER.format(timeout=timeout)
     else:
-        header = _UDS_TRANSPORT_HEADER
+        header = _UDS_TRANSPORT_HEADER.format(timeout=timeout)
 
     return header + "\n".join(stub_functions)
 
@@ -239,7 +240,7 @@ def _connect():
     if _sock is None:
         _sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         _sock.connect(os.environ["HERMES_RPC_SOCKET"])
-        _sock.settimeout(300)
+        _sock.settimeout({timeout})
     return _sock
 
 def _call(tool_name, args):
@@ -298,11 +299,11 @@ def _call(tool_name, args):
     os.rename(tmp, req_file)
 
     # Wait for response with adaptive polling
-    deadline = time.monotonic() + 300  # 5-minute timeout per tool call
+    deadline = time.monotonic() + {timeout}  # configurable timeout per tool call
     poll_interval = 0.05  # Start at 50ms
     while not os.path.exists(res_file):
         if time.monotonic() > deadline:
-            raise RuntimeError(f"RPC timeout: no response for {tool_name} after 300s")
+            raise RuntimeError(f"RPC timeout: no response for {{tool_name}} after {{{timeout}}}s")
         time.sleep(poll_interval)
         poll_interval = min(poll_interval * 1.2, 0.25)  # Back off to 250ms
 
@@ -341,6 +342,7 @@ def _rpc_server_loop(
     tool_call_counter: list,   # mutable [int] so the thread can increment
     max_tool_calls: int,
     allowed_tools: frozenset,
+    timeout: int = DEFAULT_TIMEOUT,
 ):
     """
     Accept one client connection and dispatch tool-call requests until
@@ -352,7 +354,7 @@ def _rpc_server_loop(
     try:
         server_sock.settimeout(5)
         conn, _ = server_sock.accept()
-        conn.settimeout(300)
+        conn.settimeout(timeout)
 
         buf = b""
         while True:
@@ -797,7 +799,7 @@ def _execute_remote(
 
         # Generate and ship files
         tools_src = generate_hermes_tools_module(
-            list(sandbox_tools), transport="file",
+            list(sandbox_tools), transport="file", timeout=timeout,
         )
         _ship_file_to_remote(env, f"{sandbox_dir}/hermes_tools.py", tools_src)
         _ship_file_to_remote(env, f"{sandbox_dir}/script.py", code)
@@ -1000,7 +1002,7 @@ def execute_code(
         # Write the auto-generated hermes_tools module
         # sandbox_tools is already the correct set (intersection with session
         # tools, or SANDBOX_ALLOWED_TOOLS as fallback — see lines above).
-        tools_src = generate_hermes_tools_module(list(sandbox_tools))
+        tools_src = generate_hermes_tools_module(list(sandbox_tools), timeout=timeout)
         with open(os.path.join(tmpdir, "hermes_tools.py"), "w") as f:
             f.write(tools_src)
 
@@ -1019,6 +1021,7 @@ def execute_code(
             args=(
                 server_sock, task_id, tool_call_log,
                 tool_call_counter, max_tool_calls, sandbox_tools,
+                timeout,
             ),
             daemon=True,
         )
@@ -1568,7 +1571,7 @@ def build_execute_code_schema(enabled_sandbox_tools: set = None,
         "or the task requires interactive user input.\n\n"
         f"Available via `from hermes_tools import ...`:\n\n"
         f"{tool_lines}\n\n"
-        "Limits: 5-minute timeout, 50KB stdout cap, max 50 tool calls per script. "
+        "Limits: 15-minute timeout, 50KB stdout cap, max 50 tool calls per script. "
         "terminal() is foreground-only (no background or pty).\n\n"
         f"{cwd_note}\n\n"
         "Print your final result to stdout. Use Python stdlib (json, re, math, csv, "
