@@ -209,6 +209,7 @@ DEFAULT_CONTEXT_LENGTHS = {
     "grok-2": 131072,           # grok-2, grok-2-1212, grok-2-latest
     "grok": 131072,             # catch-all (grok-beta, unknown grok-*)
     # Kimi
+    "k2.6-code-preview": 256000,
     "kimi": 262144,
     # Tencent — Hy3 Preview (Hunyuan) with 256K context window
     "hy3-preview": 256000,
