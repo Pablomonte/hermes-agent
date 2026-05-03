@@ -83,7 +83,11 @@ compression:
   enabled: true              # Enable/disable compression (default: true)
   threshold: 0.50            # Fraction of context window (default: 0.50 = 50%)
   target_ratio: 0.20         # How much of threshold to keep as tail (default: 0.20)
+  protect_first_n: 3         # Messages from start to keep uncompressed (default: 3)
   protect_last_n: 20         # Minimum protected tail messages (default: 20)
+  prompt:
+    preamble: ""             # Optional custom summarizer preamble (empty = default)
+    template: ""             # Optional custom summary template (empty = default)
 
 # Summarization model/provider configured under auxiliary:
 auxiliary:
@@ -99,8 +103,10 @@ auxiliary:
 |-----------|---------|-------|-------------|
 | `threshold` | `0.50` | 0.0-1.0 | Compression triggers when prompt tokens ≥ `threshold × context_length` |
 | `target_ratio` | `0.20` | 0.10-0.80 | Controls tail protection token budget: `threshold_tokens × target_ratio` |
+| `protect_first_n` | `3` | ≥0 | Messages from start to keep uncompressed. 0 = summarize everything into summary + tail. |
 | `protect_last_n` | `20` | ≥1 | Minimum number of recent messages always preserved |
-| `protect_first_n` | `3` | (hardcoded) | System prompt + first exchange always preserved |
+| `prompt.preamble` | `""` | string | Optional override for the summarizer preamble (empty = default) |
+| `prompt.template` | `""` | string | Optional override for summary template (empty = default). Use `{summary_budget}` placeholder. |
 
 ### Computed Values (for a 200K context model at defaults)
 
@@ -129,14 +135,14 @@ outputs (file contents, terminal output, search results).
 ### Phase 2: Determine Boundaries
 
 ```
-┌─────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────┐
 │  Message list                                               │
-│                                                             │
-│  [0..2]  ← protect_first_n (system + first exchange)        │
-│  [3..N]  ← middle turns → SUMMARIZED                        │
-│  [N..end] ← tail (by token budget OR protect_last_n)        │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                            │
+│  [0..first_n-1]  ← protect_first_n (system + first exchange)│
+│  [first_n..N]    ← middle turns → SUMMARIZED                │
+│  [N..end]        ← tail (by token budget OR protect_last_n) │
+│                                                            │
+└──────────────────────────────────────────────────┘
 ```
 
 Tail protection is **token-budget based**: walks backward from the end,
@@ -345,14 +351,4 @@ The CLI shows caching status at startup:
 
 ## Context Pressure Warnings
 
-The agent emits context pressure warnings at 85% of the compression threshold
-(not 85% of context — 85% of the threshold which is itself 50% of context):
-
-```
-⚠️  Context is 85% to compaction threshold (42,500/50,000 tokens)
-```
-
-After compression, if usage drops below 85% of threshold, the warning state
-is cleared. If compression fails to reduce below the warning level (the
-conversation is too dense), the warning persists but compression won't
-re-trigger until the threshold is exceeded again.
+Intermediate context-pressure warnings have been removed (see the iteration-budget block in `run_agent.py`, which notes: "No intermediate pressure warnings — they caused models to 'give up' prematurely on complex tasks"). Compression fires when prompt tokens reach the configured `compression.threshold` (default 50%) with no prior warning step; gateway session hygiene fires as the secondary safety net at 85% of the model's context window.

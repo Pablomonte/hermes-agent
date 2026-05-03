@@ -10,7 +10,10 @@ reasoning configuration, temperature handling, and extra_body assembly.
 """
 
 import copy
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from agent.lmstudio_reasoning import resolve_lmstudio_effort
 from agent.moonshot_schema import is_moonshot_model, sanitize_moonshot_tools
@@ -20,13 +23,20 @@ from agent.transports.types import NormalizedResponse, ToolCall, Usage
 
 
 def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> dict | None:
-    """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig.
-
-    Gemini native/cloud-code adapters do not read ``extra_body.reasoning``.
-    They only inspect ``extra_body.thinking_config`` / ``thinkingConfig`` and
-    then request thought parts with ``includeThoughts`` enabled.
-    """
+    """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig."""
     if reasoning_config is None or not isinstance(reasoning_config, dict):
+        return None
+
+    normalized_model = (model or "").strip().lower()
+    if normalized_model.startswith("google/"):
+        normalized_model = normalized_model.split("/", 1)[1]
+
+    # ``thinking_config`` is a Gemini-only request parameter. The same
+    # ``gemini`` provider also serves Gemma (and historically PaLM/Bard);
+    # those reject the field with HTTP 400 "Unknown name 'thinking_config':
+    # Cannot find field" — including the polite ``{"includeThoughts": False}``
+    # form. Omit the field entirely on non-Gemini models. (#17426)
+    if not normalized_model.startswith("gemini"):
         return None
 
     if reasoning_config.get("enabled") is False:
@@ -39,9 +49,6 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
         return {"includeThoughts": False}
 
     thinking_config: Dict[str, Any] = {"includeThoughts": True}
-    normalized_model = (model or "").strip().lower()
-    if normalized_model.startswith("google/"):
-        normalized_model = normalized_model.split("/", 1)[1]
 
     # Gemini 2.5 accepts thinkingBudget; don't guess a budget from Hermes'
     # coarse effort levels. ``includeThoughts`` alone is enough to surface
@@ -69,6 +76,30 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
             )
 
     return thinking_config
+
+
+def _snake_case_gemini_thinking_config(config: dict | None) -> dict | None:
+    """Convert Gemini thinking config keys to the OpenAI-compat field names."""
+    if not isinstance(config, dict) or not config:
+        return None
+
+    translated: Dict[str, Any] = {}
+    if isinstance(config.get("includeThoughts"), bool):
+        translated["include_thoughts"] = config["includeThoughts"]
+    if isinstance(config.get("thinkingLevel"), str) and config["thinkingLevel"].strip():
+        translated["thinking_level"] = config["thinkingLevel"].strip().lower()
+    if isinstance(config.get("thinkingBudget"), (int, float)):
+        translated["thinking_budget"] = int(config["thinkingBudget"])
+    return translated or None
+
+
+def _is_gemini_openai_compat_base_url(base_url: Any) -> bool:
+    normalized = str(base_url or "").strip().rstrip("/").lower()
+    if not normalized:
+        return False
+    if "generativelanguage.googleapis.com" not in normalized:
+        return False
+    return normalized.endswith("/openai")
 
 
 class ChatCompletionsTransport(ProviderTransport):
@@ -309,6 +340,7 @@ class ChatCompletionsTransport(ProviderTransport):
         is_nous = params.get("is_nous", False)
         is_github_models = params.get("is_github_models", False)
         provider_name = str(params.get("provider_name") or "").strip().lower()
+        base_url = params.get("base_url")
 
         provider_prefs = params.get("provider_preferences")
         if provider_prefs and is_openrouter:
@@ -362,7 +394,19 @@ class ChatCompletionsTransport(ProviderTransport):
         if is_qwen:
             extra_body["vl_high_resolution_images"] = True
 
-        if provider_name in {"gemini", "google-gemini-cli"}:
+        if provider_name == "gemini":
+            raw_thinking_config = _build_gemini_thinking_config(model, reasoning_config)
+            if _is_gemini_openai_compat_base_url(base_url):
+                thinking_config = _snake_case_gemini_thinking_config(raw_thinking_config)
+                if thinking_config:
+                    openai_compat_extra = extra_body.get("extra_body", {})
+                    google_extra = openai_compat_extra.get("google", {})
+                    google_extra["thinking_config"] = thinking_config
+                    openai_compat_extra["google"] = google_extra
+                    extra_body["extra_body"] = openai_compat_extra
+            elif raw_thinking_config:
+                extra_body["thinking_config"] = raw_thinking_config
+        elif provider_name == "google-gemini-cli":
             thinking_config = _build_gemini_thinking_config(model, reasoning_config)
             if thinking_config:
                 extra_body["thinking_config"] = thinking_config
@@ -379,6 +423,39 @@ class ChatCompletionsTransport(ProviderTransport):
         overrides = params.get("request_overrides")
         if overrides:
             api_kwargs.update(overrides)
+
+        # Tool choice override for proactive/agentic turns
+        _tool_choice = params.get("tool_choice")
+        if _tool_choice:
+            # Kimi: tool_choice='required' is rejected when thinking is enabled.
+            # Fall back to letting the model decide — the system prompt still
+            # instructs it to use tools.
+            if is_kimi and _tool_choice == "required" and not _kimi_thinking_off:
+                logger.warning(
+                    "[chat_completions] Skipping tool_choice='required' for Kimi "
+                    "because thinking is enabled (incompatible)."
+                )
+            else:
+                # Generic: disable thinking/reasoning for this turn when forcing
+                # tool_choice="required", since several providers reject the
+                # combination.  Kimi is handled above (it cannot disable thinking).
+                if _tool_choice == "required":
+                    _stripped_any = False
+                    if "reasoning_effort" in api_kwargs:
+                        api_kwargs.pop("reasoning_effort")
+                        _stripped_any = True
+                    if "extra_body" in api_kwargs:
+                        _eb = api_kwargs["extra_body"]
+                        if isinstance(_eb, dict) and "thinking_config" in _eb:
+                            _eb.pop("thinking_config")
+                            _stripped_any = True
+                        if isinstance(_eb, dict) and not _eb:
+                            api_kwargs.pop("extra_body")
+                    if _stripped_any:
+                        logger.info(
+                            "[chat_completions] Disabled thinking for tool_choice='required' turn."
+                        )
+                api_kwargs["tool_choice"] = _tool_choice
 
         return api_kwargs
 
@@ -436,9 +513,13 @@ class ChatCompletionsTransport(ProviderTransport):
         # so keep them apart in provider_data rather than merging.
         reasoning = getattr(msg, "reasoning", None)
         reasoning_content = getattr(msg, "reasoning_content", None)
+        if reasoning_content is None and hasattr(msg, "model_extra"):
+            model_extra = getattr(msg, "model_extra", None) or {}
+            if isinstance(model_extra, dict) and "reasoning_content" in model_extra:
+                reasoning_content = model_extra["reasoning_content"]
 
         provider_data: Dict[str, Any] = {}
-        if reasoning_content:
+        if reasoning_content is not None:
             provider_data["reasoning_content"] = reasoning_content
         rd = getattr(msg, "reasoning_details", None)
         if rd:
