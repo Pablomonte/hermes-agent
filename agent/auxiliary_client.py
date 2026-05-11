@@ -259,7 +259,6 @@ _PROVIDER_VISION_MODELS: Dict[str, str] = {
 # describe as having no image_in capability. Vision lives on the separate
 # Kimi Platform (api.moonshot.ai, OpenAI-wire, pay-as-you-go).  See #17076.
 _PROVIDERS_WITHOUT_VISION: frozenset = frozenset({
-    "kimi-coding",
     "kimi-coding-cn",
 })
 
@@ -2008,6 +2007,7 @@ def resolve_provider_client(
     result = _resolve_provider_client_impl(
         provider, model, async_mode, raw_codex,
         explicit_base_url, explicit_api_key, api_mode, main_runtime,
+        is_vision,
     )
     with _resolve_provider_cache_lock:
         _resolve_provider_cache[cache_key] = result
@@ -2023,6 +2023,7 @@ def _resolve_provider_client_impl(
     explicit_api_key: str = None,
     api_mode: str = None,
     main_runtime: Optional[Dict[str, Any]] = None,
+    is_vision: bool = False,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Central router: given a provider name and optional model, return a
     configured client with the correct auth, base URL, and API format.
@@ -2152,7 +2153,7 @@ def _resolve_provider_client_impl(
                            "but Nous Portal not configured (run: hermes auth)")
             return None, None
         final_model = _normalize_resolved_model(model or default, provider)
-        return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
+        return (_to_async_client(client, final_model, is_vision=_is_vision) if async_mode
                 else (client, final_model))
 
     # ── OpenAI Codex (OAuth → Responses API) ─────────────────────────

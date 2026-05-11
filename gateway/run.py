@@ -1491,6 +1491,9 @@ class GatewayRunner:
             except Exception:
                 pass
 
+        # Strip "source" — added by resolve_runtime_provider for tracing, but
+        # AIAgent.__init__() does not accept it (issue in v0.12.0).
+        runtime_kwargs.pop("source", None)
         return model, runtime_kwargs
 
     def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
