@@ -237,7 +237,7 @@ TOOLSETS = {
             "mc_perceive", "mc_move", "mc_mine", "mc_build",
             "mc_craft", "mc_combat", "mc_manage", "mc_plan",
             "mc_screenshot", "mc_command", "mc_story", "mc_registry",
-            "mc_chat", "mc_no_op",
+            "mc_chat", "mc_no_op", "embodied_plan",
         ],
         "includes": [],
     },
