@@ -1697,3 +1697,149 @@ registry.register(
     handler=lambda args, **kw: _handle_mc_noop(args, **kw),
     check_fn=check_minecraft_available,
 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 14. embodied_plan — Delegate body orchestration to Gemma-Andy via embodied-service
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _handle_embodied_plan(args: dict, **kwargs) -> str:
+    """Delegate a high-level body intent to Gemma-Andy via embodied-service.
+
+    The embodied-service composes the world_state from the bot, calls Gemma-Andy
+    over Ollama, parses the resulting JSON plan, and dispatches each tool_call
+    back to the bot. The agent gets a textual summary of plan + execution.
+    """
+    intent = args.get("intent")
+    if not intent or not isinstance(intent, str):
+        return "Error: 'intent' (string) is required"
+
+    url = os.getenv("EMBODIED_SERVICE_URL", "http://localhost:7790")
+    body: Dict[str, Any] = {"intent": intent}
+    for k in ("allowed_tools", "guardian_constraints", "previous_error",
+              "deadline_seconds", "autonomy_level"):
+        if k in args:
+            body[k] = args[k]
+
+    try:
+        req = urllib.request.Request(
+            f"{url}/intent",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        return f"Error: embodied-service unreachable at {url}: {e}"
+    except Exception as e:
+        return f"Error: embodied_plan call failed: {e}"
+
+    if not isinstance(result, dict):
+        return f"Error: unexpected response type {type(result).__name__}"
+
+    plan = result.get("plan") or {}
+    exec_results = result.get("execution_results") or []
+    tool_calls = plan.get("tool_calls") or []
+
+    if not result.get("ok"):
+        err = result.get("error", {})
+        return f"Error: embodied_plan failed (ok=false): {json.dumps(err)[:300]}"
+
+    lines = [
+        f"Plan ({result.get('elapsed_seconds', '?')}s, risk={plan.get('operational_risk', '?')}, "
+        f"model={result.get('model', '?')})",
+    ]
+    if tool_calls:
+        lines.append("Dispatched tool_calls:")
+        for tc in tool_calls:
+            arg_summary = json.dumps(tc.get("arguments", {}))
+            if len(arg_summary) > 160:
+                arg_summary = arg_summary[:157] + "..."
+            lines.append(f"  · {tc.get('name')}({arg_summary})")
+    else:
+        lines.append("(no tool_calls emitted)")
+    if exec_results:
+        lines.append("Execution results:")
+        for r in exec_results:
+            tool = r.get("tool", "?")
+            ok = r.get("ok")
+            if ok:
+                data = r.get("data")
+                preview = json.dumps(data)[:140] if data is not None else "OK"
+                lines.append(f"  · {tool}: OK ({preview})")
+            else:
+                err = r.get("error", "")
+                lines.append(f"  · {tool}: FAIL ({str(err)[:140]})")
+    return "\n".join(lines)
+
+
+EMBODIED_PLAN_SCHEMA = {
+    "name": "embodied_plan",
+    "description": (
+        "Delegate body orchestration to Gemma-Andy via the local embodied-service. "
+        "Use for high-level physical intents like 'mine 2 oak logs', 'follow the "
+        "player', or 'scan around you'. The service composes world_state from the "
+        "bot, calls the local Gemma-Andy model to plan, dispatches the resulting "
+        "tool_calls to the bot, and returns a summary. For atomic actions you can "
+        "still use mc_move/mc_mine/etc. directly — embodied_plan is for letting the "
+        "body model orchestrate a coherent multi-step body action with its own "
+        "guardian checks. Intent should be a clear imperative English sentence; "
+        "vague or out-of-scope intents will be refused upstream."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "intent": {
+                "type": "string",
+                "description": (
+                    "Imperative English body intent. Examples: 'Follow the player "
+                    "named X and stay within 3 blocks.', 'Mine 2 oak logs from the "
+                    "nearest tree.', 'Scan around you and report what you see.'"
+                ),
+            },
+            "allowed_tools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional whitelist of low-level body tool names Gemma-Andy may "
+                    "emit (e.g. ['scan_nearby','goto','mine_block']). If omitted, "
+                    "the service uses safe defaults from its schema."
+                ),
+            },
+            "guardian_constraints": {
+                "type": "object",
+                "description": (
+                    "Optional safety constraints. Example: "
+                    "{'autonomy_level': 2, 'no_tnt': true, 'no_protected_zone_edit': true}."
+                ),
+            },
+            "previous_error": {
+                "type": "object",
+                "description": (
+                    "Optional last-tool error for recovery context. Shape: "
+                    "{'tool': str, 'error_type': str, 'details': str}."
+                ),
+            },
+        },
+        "required": ["intent"],
+    },
+}
+
+
+def check_embodied_service_available() -> bool:
+    """Tool is available iff EMBODIED_SERVICE_URL env var is set.
+
+    We don't probe the service here — that would block tool listing. The check
+    is intentionally cheap; the handler reports unreachability at call time.
+    """
+    return bool(os.getenv("EMBODIED_SERVICE_URL"))
+
+
+registry.register(
+    name="embodied_plan",
+    toolset="minecraft",
+    schema=EMBODIED_PLAN_SCHEMA,
+    handler=lambda args, **kw: _handle_embodied_plan(args, **kw),
+    check_fn=check_embodied_service_available,
+)
