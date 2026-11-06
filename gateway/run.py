@@ -6949,6 +6949,12 @@ class GatewayRunner:
                         except Exception:
                             pass
 
+            elif event.message_type in (MessageType.VOICE, MessageType.AUDIO):
+                # Audio/VOICE message but no downloadable media — leave a note so the model
+                # (and the user) knows the audio could not be processed.
+                note = "[The user sent an audio message, but it could not be retrieved for transcription.]"
+                message_text = f"{message_text}\n{note}" if message_text else note
+
         if event.media_urls and event.message_type == MessageType.DOCUMENT:
             import mimetypes as _mimetypes
             from tools.credential_files import to_agent_visible_cache_path
@@ -7043,6 +7049,9 @@ class GatewayRunner:
             except Exception as exc:
                 logger.debug("@ context reference expansion failed: %s", exc)
 
+        # Defensive fallback: never send an empty user message to the model.
+        if not (message_text or '').strip():
+            message_text = '(The user sent a message with no text content)'
         return message_text
 
     def _consume_pending_native_image_paths(self, session_key: str) -> List[str]:

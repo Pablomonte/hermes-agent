@@ -1043,6 +1043,10 @@ class DaemonCraftAdapter(BasePlatformAdapter):
         if content and content.strip() and content != "None":
             await self._post_agent_log(content, metadata)
 
+        # SOUL protocol: PASS means "no chat, actions only". Empty = same.
+        if not content or content.strip() in ("PASS", ""):
+            return SendResult(success=True)
+
         # _world_names is populated lazily from inbound broadcasts. If the gateway
         # initiates an outbound broadcast before any inbound from that world, this
         # will default to DM (whisper). For now the agent only replies to inbound.

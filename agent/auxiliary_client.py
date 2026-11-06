@@ -2045,10 +2045,11 @@ def _is_unsupported_parameter_error(exc: Exception, param: str) -> bool:
     Different OpenAI-compatible endpoints phrase the same class of error a few
     ways: ``Unsupported parameter: X``, ``unsupported_parameter`` with a
     ``param`` field, ``X is not supported``, ``unknown parameter: X``,
-    ``unrecognized request argument: X``.  We match on both the parameter
-    name and a generic "unsupported/unknown/unrecognized parameter" marker so
-    call sites can reactively retry without the offending key instead of
-    surfacing a noisy auxiliary failure.
+    ``unrecognized request argument: X``, ``invalid X: only Y is allowed``.  We
+    match on both the parameter name and a generic
+    "unsupported/unknown/unrecognized/invalid parameter" marker so call sites
+    can reactively retry without the offending key instead of surfacing a noisy
+    auxiliary failure.
 
     Generalizes the temperature-specific detector that originally shipped
     with PR #15621 so the same retry strategy can cover ``max_tokens``,
@@ -2070,6 +2071,7 @@ def _is_unsupported_parameter_error(exc: Exception, param: str) -> bool:
         "unrecognized request argument",
         "unrecognized parameter",
         "invalid parameter",
+        "invalid temperature",
     ))
 
 
@@ -2080,6 +2082,30 @@ def _is_unsupported_temperature_error(exc: Exception) -> bool:
     public symbol because existing tests and call sites import it by name.
     """
     return _is_unsupported_parameter_error(exc, "temperature")
+
+
+def _extract_required_temperature(err_message: str) -> Optional[float]:
+    """Parse a provider error for an enforced temperature value.
+
+    Some providers (e.g. Kimi thinking models) reject any temperature other
+    than a specific value with messages like ``invalid temperature: only 1 is
+    allowed for this model``.  When we can extract that value, retrying with it
+    is more likely to succeed than dropping the parameter entirely.
+    """
+    import re
+    text = (err_message or "").lower()
+    for pattern in (
+        r"only\s+(-?\d+(?:\.\d+)?)\s+is\s+allowed",
+        r"temperature\s+must\s+be\s+(-?\d+(?:\.\d+)?)",
+        r"temperature\s+must\s+equal\s+(-?\d+(?:\.\d+)?)",
+    ):
+        m = re.search(pattern, text)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
 
 
 def _evict_cached_clients(provider: str) -> None:
@@ -4198,11 +4224,19 @@ def call_llm(
     except Exception as first_err:
         if "temperature" in kwargs and _is_unsupported_temperature_error(first_err):
             retry_kwargs = dict(kwargs)
-            retry_kwargs.pop("temperature", None)
-            logger.info(
-                "Auxiliary %s: provider rejected temperature; retrying once without it",
-                task or "call",
-            )
+            required_temp = _extract_required_temperature(str(first_err))
+            if required_temp is not None:
+                retry_kwargs["temperature"] = required_temp
+                logger.info(
+                    "Auxiliary %s: provider rejected temperature; retrying with temperature=%s",
+                    task or "call", required_temp,
+                )
+            else:
+                retry_kwargs.pop("temperature", None)
+                logger.info(
+                    "Auxiliary %s: provider rejected temperature; retrying once without it",
+                    task or "call",
+                )
             try:
                 return _validate_llm_response(
                     client.chat.completions.create(**retry_kwargs), task)
@@ -4553,11 +4587,19 @@ async def async_call_llm(
     except Exception as first_err:
         if "temperature" in kwargs and _is_unsupported_temperature_error(first_err):
             retry_kwargs = dict(kwargs)
-            retry_kwargs.pop("temperature", None)
-            logger.info(
-                "Auxiliary %s (async): provider rejected temperature; retrying once without it",
-                task or "call",
-            )
+            required_temp = _extract_required_temperature(str(first_err))
+            if required_temp is not None:
+                retry_kwargs["temperature"] = required_temp
+                logger.info(
+                    "Auxiliary %s (async): provider rejected temperature; retrying with temperature=%s",
+                    task or "call", required_temp,
+                )
+            else:
+                retry_kwargs.pop("temperature", None)
+                logger.info(
+                    "Auxiliary %s (async): provider rejected temperature; retrying once without it",
+                    task or "call",
+                )
             try:
                 return _validate_llm_response(
                     await client.chat.completions.create(**retry_kwargs), task)

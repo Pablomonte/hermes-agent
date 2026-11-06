@@ -75,6 +75,7 @@ from gateway.platforms.base import (
     cache_document_from_bytes,
     resolve_proxy_url,
     SUPPORTED_VIDEO_TYPES,
+    SUPPORTED_AUDIO_TYPES,
     SUPPORTED_DOCUMENT_TYPES,
     utf16_len,
 )
@@ -4036,6 +4037,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 logger.info("[Telegram] Cached user audio at %s", cached_path)
             except Exception as e:
                 logger.warning("[Telegram] Failed to cache audio: %s", e, exc_info=True)
+                event.text = "[The user sent an audio file but it could not be downloaded: {}]".format(e)
+                event.text = "[The user sent an audio file but it could not be downloaded: {}]".format(e)
 
         elif msg.video:
             try:
@@ -4131,6 +4134,27 @@ class TelegramAdapter(BasePlatformAdapter):
                     event.media_types = [SUPPORTED_VIDEO_TYPES[ext]]
                     event.message_type = MessageType.VIDEO
                     logger.info("[Telegram] Cached user video document at %s", cached_path)
+                    await self.handle_message(event)
+                    return
+
+                # Route audio documents to audio cache (like images/videos)
+                if not ext and doc.mime_type:
+                    audio_mime_to_ext = {v: k for k, v in SUPPORTED_AUDIO_TYPES.items()}
+                    ext = audio_mime_to_ext.get(doc.mime_type, "")
+
+                if ext in SUPPORTED_AUDIO_TYPES:
+                    try:
+                        file_obj = await doc.get_file()
+                        audio_bytes = await file_obj.download_as_bytearray()
+                        cached_path = cache_audio_from_bytes(bytes(audio_bytes), ext=ext)
+                        event.media_urls = [cached_path]
+                        event.media_types = [SUPPORTED_AUDIO_TYPES[ext]]
+                        event.message_type = MessageType.AUDIO
+                        logger.info("[Telegram] Cached user audio document at %s", cached_path)
+                    except Exception as e:
+                        logger.warning("[Telegram] Failed to cache audio document: %s", e)
+                        event.text = "[The user sent an audio file but it could not be downloaded: {}]".format(e)
+                        event.message_type = MessageType.AUDIO
                     await self.handle_message(event)
                     return
 
