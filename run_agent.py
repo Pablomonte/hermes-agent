@@ -1116,6 +1116,17 @@ class AIAgent:
         pass_session_id: bool = False,
         turn_timeout_seconds: int = None,
         agent_identity: str = None,
+        persist_session: bool = True,
+        # Detached / non-CLI invariants. Default values match the historical
+        # in-process initialization: depth 0, env-derived cwd, lazy hint
+        # tracker, no spinner, no progress callback. Detached entrypoints
+        # (research_job_runner, future cron / batch parents) override these
+        # to avoid the post-init patch block that the agent.factory module
+        # used to apply manually. See HRM-57.
+        delegate_depth: int = 0,
+        terminal_cwd: str | None = None,
+        cwd: str | None = None,
+        subdirectory_hints: Any = None,
     ):
         """
         Initialize the AI Agent.
@@ -1363,10 +1374,15 @@ class AIAgent:
         self._tool_worker_threads: set[int] = set()
         self._tool_worker_threads_lock = threading.Lock()
         
-        # Subagent delegation state
-        self._delegate_depth = 0        # 0 = top-level agent, incremented for children
-        self._active_children = []      # Running child AIAgents (for interrupt propagation)
+        # Subagent delegation state — caller may seed depth (HRM-57) for
+        # detached parents that simulate a top-level agent in a non-CLI flow.
+        self._delegate_depth = delegate_depth   # 0 = top-level agent, incremented for children
+        self._active_children = []              # Running child AIAgents (for interrupt propagation)
         self._active_children_lock = threading.Lock()
+        # Spinner is normally attached during run_conversation; pre-init to
+        # None so detached parents that hand the agent off to delegate_task
+        # without ever entering an interactive loop don't AttributeError.
+        self._delegate_spinner = None
         
         # Store OpenRouter provider preferences
         self.providers_allowed = providers_allowed
@@ -2328,9 +2344,18 @@ class AIAgent:
             except Exception as _ce_err:
                 logger.debug("Context engine on_session_start: %s", _ce_err)
 
-        self._subdirectory_hints = SubdirectoryHintTracker(
-            working_dir=os.getenv("TERMINAL_CWD") or None,
-        )
+        # Detached parents (HRM-57) may pass subdirectory_hints=None or a
+        # pre-built tracker; otherwise build the env-derived default.
+        if subdirectory_hints is not None:
+            self._subdirectory_hints = subdirectory_hints
+        else:
+            self._subdirectory_hints = SubdirectoryHintTracker(
+                working_dir=terminal_cwd or os.getenv("TERMINAL_CWD") or None,
+            )
+        # terminal_cwd / cwd are exposed on the instance for delegate_task
+        # consumers; default to env-derived values when not passed.
+        self.terminal_cwd = terminal_cwd or os.getenv("TERMINAL_CWD") or os.getcwd()
+        self.cwd = cwd or os.getcwd()
         self._user_turn_count = 0
 
         # Cumulative token usage for the session
@@ -10471,6 +10496,7 @@ class AIAgent:
                 session_id=self.session_id or "",
                 enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                 skip_pre_tool_call_hook=True,
+                parent_agent=self,
             )
 
     @staticmethod
@@ -10851,7 +10877,9 @@ class AIAgent:
                 env=get_active_env(effective_task_id),
             ) if not _is_multimodal_tool_result(function_result) else function_result
 
-            subdir_hints = self._subdirectory_hints.check_tool_call(name, args)
+            subdir_hints = None
+            if self._subdirectory_hints:
+                subdir_hints = self._subdirectory_hints.check_tool_call(name, args)
             if subdir_hints:
                 if _is_multimodal_tool_result(function_result):
                     # Append the hint to the text summary part so the model
@@ -11182,6 +11210,7 @@ class AIAgent:
                         session_id=self.session_id or "",
                         enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                         skip_pre_tool_call_hook=True,
+                        parent_agent=self,
                     )
                     _spinner_result = function_result
                 except Exception as tool_error:
@@ -11202,6 +11231,7 @@ class AIAgent:
                         session_id=self.session_id or "",
                         enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                         skip_pre_tool_call_hook=True,
+                        parent_agent=self,
                     )
                 except Exception as tool_error:
                     function_result = f"Error executing tool '{function_name}': {tool_error}"
@@ -11267,12 +11297,13 @@ class AIAgent:
             ) if not _is_multimodal_tool_result(function_result) else function_result
 
             # Discover subdirectory context files from tool arguments
-            subdir_hints = self._subdirectory_hints.check_tool_call(function_name, function_args)
-            if subdir_hints:
-                if _is_multimodal_tool_result(function_result):
-                    _append_subdir_hint_to_multimodal(function_result, subdir_hints)
-                else:
-                    function_result += subdir_hints
+            if self._subdirectory_hints:
+                subdir_hints = self._subdirectory_hints.check_tool_call(function_name, function_args)
+                if subdir_hints:
+                    if _is_multimodal_tool_result(function_result):
+                        _append_subdir_hint_to_multimodal(function_result, subdir_hints)
+                    else:
+                        function_result += subdir_hints
 
             # Unwrap _multimodal dicts to an OpenAI-style content list
             # (see parallel path for rationale). String results pass through.
